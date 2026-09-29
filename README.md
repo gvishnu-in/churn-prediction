@@ -10,12 +10,16 @@ then builds a classification model to flag at-risk customers before they leave.
 ## Tools Used
 - **Python (pandas, NumPy)** — data cleaning and feature engineering
 - **scikit-learn** — Logistic Regression & Random Forest classification
-- **Matplotlib/Seaborn** (optional, for local plots) or **Power BI / Tableau
-  Public** — dashboard layer
+- **Plotly** — interactive dashboard in a standalone HTML file (no Power BI
+  installation required)
 - **Jupyter/VS Code** — development environment
 
 ## Repo Structure
 ```
+├── .github/
+│   └── workflows/
+│       └── deploy-dashboard.yml
+├── .gitignore
 ├── data/
 │   ├── WA_Fn-UseC_-Telco-Customer-Churn.csv   # raw Kaggle download
 │   └── telco_churn_clean.csv                  # output of step 1
@@ -23,6 +27,7 @@ then builds a classification model to flag at-risk customers before they leave.
 ├── 01_data_cleaning.py
 ├── 02_eda_analysis.py
 ├── 03_classification_model.py
+├── 04_create_dashboard.py
 └── README.md
 ```
 
@@ -62,6 +67,7 @@ Run the scripts in order:
 python 01_data_cleaning.py
 python 02_eda_analysis.py
 python 03_classification_model.py
+python 04_create_dashboard.py
 ```
 
 When you run the project again later, open Ubuntu, return to the project
@@ -78,17 +84,25 @@ py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Then run the three scripts with
-`.\.venv\Scripts\python.exe 01_data_cleaning.py` (replace the filename with
-`02_eda_analysis.py` or `03_classification_model.py` for the next steps).
+Run the four scripts from the project folder in this order:
+
+```powershell
+.\.venv\Scripts\python.exe 01_data_cleaning.py
+.\.venv\Scripts\python.exe 02_eda_analysis.py
+.\.venv\Scripts\python.exe 03_classification_model.py
+.\.venv\Scripts\python.exe 04_create_dashboard.py
+```
+
+The dashboard is written to `dashboard/churn_dashboard.html`.
 Some Windows systems may block pandas' compiled files through Code Integrity;
 if that happens, use the Linux/WSL instructions above rather than disabling
 Windows security policy.
 
 The cleaning step creates or replaces `data/telco_churn_clean.csv`. Run the
-EDA and model steps after cleaning. The scripts resolve data paths relative
-to their own files. Load the cleaned CSV into Power BI or Tableau if you want
-to build a dashboard; no dashboard file is included in this project.
+EDA, model, and dashboard steps after cleaning. The scripts resolve data
+paths relative to their own files. The dashboard step creates
+`dashboard/churn_dashboard.html`, a standalone interactive page that you can
+open in a web browser; Power BI or Tableau is not required.
 
 ## Key Findings
 *(Computed by running `02_eda_analysis.py` on the full 7,043-row dataset.)*
@@ -138,8 +152,26 @@ flag at-risk accounts for the retention team before cancellation — turning
 churn management from a reactive, post-hoc exercise into a targeted,
 model-driven one.
 
-## Dashboard Plan
-The dashboard is a suggested next step and is not included in this project.
-A useful executive dashboard could include a churn-rate KPI card, churn by
-contract and tenure cohort, monthly charges by churn status, churn by payment
-method, and a filterable churn-risk customer table.
+## Dashboard
+The generated dashboard includes overall churn KPIs and interactive charts
+for churn by contract, tenure, internet service, payment method, and number
+of services, plus monthly charge distributions for retained and churned
+customers. Hover for chart details; the Plotly toolbar supports zooming,
+panning, and downloading chart images. It is a local static HTML report and
+does not need a server or Power BI. It summarizes historical patterns and
+does not display individual churn predictions.
+
+## Publish on GitHub Pages
+The GitHub Actions workflow builds the dashboard and deploys it whenever code
+is pushed to `main`. To enable publishing:
+
+1. Push the project to the `main` branch on GitHub.
+2. In the repository, open **Settings → Pages** and set **Build and deployment
+  → Source** to **GitHub Actions**.
+3. Open the **Actions** tab and wait for the **Deploy dashboard** workflow to
+  finish successfully.
+4. Open the deployed dashboard at
+  <https://gvishnu-in.github.io/churn-prediction/churn_dashboard.html>.
+
+The workflow regenerates the standalone HTML from the checked-in cleaned CSV;
+the generated file is ignored by Git and does not need to be committed.
