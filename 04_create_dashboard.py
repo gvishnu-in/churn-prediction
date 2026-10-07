@@ -245,6 +245,7 @@ def main() -> None:
     dashboard_html = build_dashboard(data)
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(dashboard_html, encoding="utf-8")
+    (OUTPUT_PATH.parent / "index.html").write_text(dashboard_html, encoding="utf-8")
     print(f"Dashboard created: {OUTPUT_PATH}")
 
 

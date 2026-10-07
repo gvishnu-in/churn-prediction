@@ -1,1 +1,5 @@
 /dashboard/churn_dashboard.html
+/dashboard/index.html
+__pycache__/
+*.py[cod]
+.pytest_cache/
