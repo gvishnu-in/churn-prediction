@@ -51,8 +51,15 @@ that folder.
 
 ### Linux or WSL (recommended if Windows blocks Python packages)
 
-Open Ubuntu (WSL) and go to the project folder. Replace `user` in the path
-with your Windows account name if it is different:
+If you are at a Windows PowerShell prompt, first enter Ubuntu WSL:
+
+```powershell
+wsl.exe -d Ubuntu
+```
+
+Run the remaining Linux commands **inside the Ubuntu/WSL terminal**, not in
+PowerShell. Replace `user` in the path with your Windows account name if it
+is different:
 
 ```bash
 cd /mnt/c/Users/user/Downloads/churn_project/churn_project
@@ -202,13 +209,26 @@ does not display individual churn predictions.
 
 ## Run the prediction API locally
 
-Install the dependencies in the active environment, generate the model by
-running `03_classification_model.py`, then start the service from the
-repository root:
+When Windows blocks pandas, run these commands in order. First enter WSL
+from PowerShell:
+
+```powershell
+wsl.exe -d Ubuntu
+```
+
+At the Ubuntu/WSL prompt, run:
 
 ```bash
-uvicorn app:app --reload
+cd /mnt/c/Users/user/Downloads/churn_project/churn_project
+source ~/churn-venv/bin/activate
+python -m pip install -r requirements-dev.txt
+python -m uvicorn app:app --reload
 ```
+
+The `source` command and Linux `/mnt/c/...` path only work inside WSL; do
+not enter them at a `PS ...>` PowerShell prompt. `python -m uvicorn` runs
+Uvicorn through the active WSL Python environment, so it does not depend on
+the shell finding a separate `uvicorn` command.
 
 Interactive API documentation is at <http://127.0.0.1:8000/docs>. The health
 check is `GET /health`. Send every raw customer feature (excluding
