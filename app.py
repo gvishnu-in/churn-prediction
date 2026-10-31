@@ -3,18 +3,39 @@
 from contextlib import asynccontextmanager
 import json
 import logging
+import os
 from pathlib import Path
-from typing import Literal
+import time
+from typing import Annotated, Literal
+import uuid
 
 import joblib
 import pandas as pd
 import sklearn
-from fastapi import FastAPI, Request
+from fastapi import Body, FastAPI, Request
 from pydantic import BaseModel, ConfigDict, Field
+
+from model_utils import risk_level_for
 
 MODEL_PATH = Path(__file__).resolve().parent / "models" / "churn_model.joblib"
 METADATA_PATH = Path(__file__).resolve().parent / "models" / "model_metadata.json"
 logger = logging.getLogger(__name__)
+
+
+def _tenure_upper_bound() -> int:
+    value = os.environ.get("TENURE_UPPER_BOUND", "120")
+    try:
+        upper_bound = int(value)
+    except ValueError as error:
+        raise RuntimeError("TENURE_UPPER_BOUND must be a non-negative integer.") from error
+    if upper_bound < 0:
+        raise RuntimeError("TENURE_UPPER_BOUND must be a non-negative integer.")
+    return upper_bound
+
+
+TENURE_UPPER_BOUND = _tenure_upper_bound()
+# The training data tops out at 72 months; this bound admits longer legacy tenure
+# while limiting extrapolation for values beyond the model's observed range.
 
 CUSTOMER_EXAMPLE = {
     "gender": "Female",
@@ -46,7 +67,7 @@ class CustomerFeatures(BaseModel):
     SeniorCitizen: Literal[0, 1] = Field(examples=[0])
     Partner: Literal["Yes", "No"] = Field(examples=["Yes"])
     Dependents: Literal["Yes", "No"] = Field(examples=["No"])
-    tenure: int = Field(ge=0, le=72, examples=[1])
+    tenure: int = Field(ge=0, le=TENURE_UPPER_BOUND, examples=[1])
     PhoneService: Literal["Yes", "No"] = Field(examples=["Yes"])
     MultipleLines: Literal["Yes", "No", "No phone service"] = Field(
         examples=["No"]
@@ -111,6 +132,52 @@ app = FastAPI(
 )
 
 
+def _log_request(
+    request: Request,
+    *,
+    request_id: str,
+    started_at: float,
+    status_code: int,
+) -> None:
+    metadata = getattr(request.app.state, "metadata", {})
+    record = {
+        "request_id": request_id,
+        "latency_ms": round((time.perf_counter() - started_at) * 1000, 3),
+        "model_version": metadata.get("model_version"),
+        "probability": getattr(request.state, "log_probability", None),
+        "risk_level": getattr(request.state, "log_risk_level", None),
+        "status_code": status_code,
+        "method": request.method,
+        "path": request.url.path,
+    }
+    logger.info(json.dumps(record, separators=(",", ":")))
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    request_id = uuid.uuid4().hex
+    request.state.request_id = request_id
+    started_at = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        _log_request(
+            request,
+            request_id=request_id,
+            started_at=started_at,
+            status_code=500,
+        )
+        raise
+    _log_request(
+        request,
+        request_id=request_id,
+        started_at=started_at,
+        status_code=response.status_code,
+    )
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
 @app.get("/health")
 def health(request: Request) -> dict[str, str]:
     if not hasattr(request.app.state, "model"):
@@ -128,15 +195,42 @@ def predict(
     features = pd.DataFrame([customer.model_dump()])
     probability = float(request.app.state.model.predict_proba(features)[0, 1])
     cutoffs = request.app.state.metadata["risk_band_cutoffs"]
-    risk_level: Literal["low", "medium", "high"]
-    if probability < cutoffs["low_upper"]:
-        risk_level = "low"
-    elif probability < cutoffs["medium_upper"]:
-        risk_level = "medium"
-    else:
-        risk_level = "high"
+    risk_level = risk_level_for(probability, cutoffs)
+    request.state.log_probability = probability
+    request.state.log_risk_level = risk_level
     return {
         "churn_probability": probability,
         "risk_level": risk_level,
         "model_version": request.app.state.metadata["model_version"],
     }
+
+
+@app.post("/predict/batch")
+def predict_batch(
+    customers: Annotated[
+        list[CustomerFeatures], Body(min_length=1, max_length=1000)
+    ],
+    request: Request,
+) -> list[dict[str, float | str]]:
+    features = pd.DataFrame([customer.model_dump() for customer in customers])
+    probabilities = request.app.state.model.predict_proba(features)[:, 1]
+    metadata = request.app.state.metadata
+    predictions = []
+    risk_counts = {"low": 0, "medium": 0, "high": 0}
+    for probability in probabilities:
+        value = float(probability)
+        risk_level = risk_level_for(value, metadata["risk_band_cutoffs"])
+        risk_counts[risk_level] += 1
+        predictions.append(
+            {
+                "churn_probability": value,
+                "risk_level": risk_level,
+                "model_version": metadata["model_version"],
+            }
+        )
+    request.state.log_probability = {
+        "count": len(predictions),
+        "mean": float(probabilities.mean()),
+    }
+    request.state.log_risk_level = risk_counts
+    return predictions

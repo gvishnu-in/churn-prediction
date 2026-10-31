@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from app import CUSTOMER_EXAMPLE, app
@@ -34,9 +36,68 @@ def test_health_and_prediction_endpoints() -> None:
 
 
 def test_prediction_rejects_invalid_customer_fields() -> None:
-    invalid_customer = {**CUSTOMER_EXAMPLE, "tenure": 100}
+    invalid_customer = {**CUSTOMER_EXAMPLE, "tenure": 121}
 
     with TestClient(app) as client:
         response = client.post("/predict", json=invalid_customer)
 
     assert response.status_code == 422
+
+
+def test_prediction_rejects_category_outside_training_vocabulary() -> None:
+    invalid_customer = {**CUSTOMER_EXAMPLE, "gender": "Other"}
+
+    with TestClient(app) as client:
+        response = client.post("/predict", json=invalid_customer)
+
+    assert response.status_code == 422
+
+
+def test_batch_prediction_happy_path() -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/predict/batch",
+            json=[CUSTOMER_EXAMPLE, {**CUSTOMER_EXAMPLE, "tenure": 12}],
+        )
+
+    assert response.status_code == 200
+    predictions = response.json()
+    assert len(predictions) == 2
+    assert all(
+        prediction["model_version"] == app.state.metadata["model_version"]
+        for prediction in predictions
+    )
+    assert all(
+        0 <= prediction["churn_probability"] <= 1 for prediction in predictions
+    )
+
+
+def test_batch_prediction_enforces_maximum_size() -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/predict/batch", json=[CUSTOMER_EXAMPLE] * 1001
+        )
+
+    assert response.status_code == 422
+
+
+def test_request_logs_are_structured_without_customer_fields(caplog) -> None:
+    caplog.set_level("INFO", logger="app")
+    with TestClient(app) as client:
+        response = client.post("/predict", json=CUSTOMER_EXAMPLE)
+
+    assert response.headers["X-Request-ID"]
+    request_log = next(
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "app" and record.getMessage().startswith("{")
+    )
+    assert {
+        "request_id",
+        "latency_ms",
+        "model_version",
+        "probability",
+        "risk_level",
+    }.issubset(request_log)
+    assert "gender" not in request_log
+    assert "customerID" not in request_log
