@@ -1,15 +1,14 @@
 # Customer Churn Analysis — Telco Dataset
 
-**Live dashboard:** `https://<username>.github.io/<repo-name>/` (replace with the published URL)
+**Live dashboard:** [Telco Customer Churn Dashboard](https://gvishnu-in.github.io/churn-prediction/)
 
-**Screenshots:** _TODO: add dashboard screenshots to `docs/screenshots/`._
+**Project guide:** [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)
 
 ## Problem Statement
-Telecom companies lose 15–25% of their customer base to churn annually, and
-acquiring a new customer costs 5–7x more than retaining an existing one. This
-project analyzes the Telco Customer Churn dataset (Kaggle) to identify **who
-is churning, why, and which levers the business can pull** to reduce it —
-then builds a classification model to flag at-risk customers before they leave.
+This project analyzes the Telco Customer Churn dataset to identify customer
+groups with different historical churn rates, compare classification models,
+and provide a calibrated score for prioritizing retention outreach. The
+observational results are hypotheses for experiments, not causal findings.
 
 ## Tools Used
 - **Python (pandas, NumPy)** — data cleaning and feature engineering
@@ -28,18 +27,29 @@ then builds a classification model to flag at-risk customers before they leave.
 │   ├── WA_Fn-UseC_-Telco-Customer-Churn.csv   # raw Kaggle download
 │   └── telco_churn_clean.csv                  # output of step 1
 ├── models/
-│   └── churn_model.joblib                     # fitted prediction pipeline
+│   ├── churn_model.joblib                     # calibrated scoring pipeline
+│   └── model_metadata.json                    # training provenance and metrics
+├── monitoring/
+│   └── drift.py                               # PSI drift-monitoring stub
 ├── tests/
 │   ├── test_api.py
-│   └── test_data.py
+│   ├── test_data.py
+│   ├── test_model_artifact.py
+│   ├── test_model_utils.py
+│   ├── test_score_customers.py
+│   └── test_drift.py
 ├── app.py                                      # FastAPI prediction service
 ├── Dockerfile
+├── cost_assumptions.py
+├── model_utils.py
 ├── requirements.txt
 ├── requirements-dev.txt
+├── score_customers.py                          # ranked CSV batch scorer
 ├── 01_data_cleaning.py
 ├── 02_eda_analysis.py
 ├── 03_classification_model.py
 ├── 04_create_dashboard.py
+├── docs/PROJECT_GUIDE.md
 └── README.md
 ```
 
@@ -130,53 +140,99 @@ not required.
   **7,043 rows and 23 columns**.
 - The 11 blank raw `TotalCharges` values all belong to customers with
   `tenure = 0`. Cleaning converts them to numeric and sets them to `0`.
-- After dropping `customerID`, **22 feature rows are identical**. They are
-  likely distinct customers with the same attributes, so they are kept
-  intentionally rather than deduplicated.
+- Repeated feature rows are retained; the pipeline does not deduplicate
+  customers.
 
 ## Key Findings
 *(Computed by running `02_eda_analysis.py` on the full 7,043-row dataset.)*
-- **Contract type is the strongest churn lever**: Month-to-month customers
+- **Contract type has the largest observed churn-rate difference**: Month-to-month customers
   churn at **42.7%**, vs. 11.3% for one-year and just **2.8%** for two-year
   contracts.
 - **Churn is front-loaded in the first year**: customers in their first
   0–6 months churn at **52.9%**, dropping to 9.5% by months 49–72.
 - **Fiber optic customers churn more than DSL** — 41.9% vs. 19.0% — despite
   paying more, pointing to a price/value or service-quality gap.
-- **Price sensitivity is real**: churned customers pay a median $79.65/month
+- **Monthly charges differ by churn outcome**: churned customers pay a median $79.65/month
   vs. $64.43/month for retained customers.
-- **Electronic check payers churn at 45.3%**, more than 2.5x the rate of
-  customers on automatic bank transfer (16.7%) or credit card (15.2%) —
-  a fixable billing-experience problem.
-- Customers with 0 counted services churn at 43.8%, dropping to 5.3% for
-  customers with 8 services — bundling increases stickiness.
+- **Electronic check payers churn at 45.3%**, compared with automatic bank
+  transfer (16.7%) or credit card (15.2%) —
+  a billing-experience hypothesis to investigate.
+- Customers with 0 counted services churn at 43.8%, compared with 5.3% for
+  customers with 8 services; this is an association, not proof that bundling
+  reduces churn.
 
-## Model Performance
+## Model card
 
-Fresh output from `03_classification_model.py` using a stratified 80/20
-train-test split (random state 42) on all 7,043 raw customer rows. The
-preprocessing pipeline operates on the original customer fields, excluding
-the customer identifier and churn target.
+**Intended use:** prioritize customers for a retention review or offer test.
+This is not an automated cancellation decision and is not a causal estimate.
+
+**Data:** the raw Telco CSV has 7,043 rows. The target is `Churn`; `customerID`
+is excluded. The stratified 80/20 hold-out comparison uses random state 42.
+Five-fold stratified cross-validation runs only on the training portion.
+The final model is a calibrated Random Forest pipeline; its fit uses 5,634
+training rows and 19 raw customer features.
+
+### Training-split cross-validation
+
+Mean +/- sample standard deviation across stratified folds. Recall is measured
+at the largest recall with precision at least 0.60.
+
+| Model | ROC-AUC | PR-AUC (average precision) | Recall at precision >= 0.60 |
+|---|---:|---:|---:|
+| Logistic Regression | 0.846 +/- 0.014 | 0.661 +/- 0.022 | 0.656 +/- 0.085 |
+| Logistic Regression (balanced) | 0.846 +/- 0.014 | 0.660 +/- 0.022 | 0.652 +/- 0.086 |
+| Random Forest (balanced) | 0.847 +/- 0.012 | 0.661 +/- 0.020 | 0.652 +/- 0.079 |
+
+### Preserved hold-out comparison
+
+These are the existing default class-label prediction results, retained so
+they can be compared with the cross-validation results. The table uses the
+same stratified hold-out split.
 
 | Model | Accuracy | Precision | Recall | ROC-AUC |
-|---|---|---|---|---|
+|---|---:|---:|---:|---:|
 | Logistic Regression | 0.807 | 0.660 | 0.561 | 0.842 |
-| Random Forest | 0.754 | 0.524 | 0.802 | 0.843 |
+| Logistic Regression (balanced) | 0.739 | 0.505 | 0.783 | 0.842 |
+| Random Forest (balanced) | 0.754 | 0.524 | 0.802 | 0.843 |
 
-**Model choice:** Logistic Regression has higher precision (**0.660** vs.
-**0.524**), while Random Forest has much higher recall (**0.802** vs.
-**0.561**) at a similar ROC-AUC (**0.843** vs. **0.842**). If the goal is to
-catch more churners for retention offers, Random Forest is the defensible
-choice; expect more false-positive outreach than with Logistic Regression.
+The original unweighted Logistic Regression and Random Forest scores match
+the initial README values. The balanced Logistic Regression is an added
+comparison. Similar ROC-AUC alone does not determine the operating model:
+outreach capacity, precision/recall trade-offs, calibration, and offer costs
+matter.
 
-**Top 3 Random Forest feature importances:** `tenure` (**0.1808**),
-`Contract_Two year` (**0.1208**), and `TotalCharges` (**0.1174**). These
-are model importances, not causal effects.
+### Calibration and threshold
 
-The fitted Random Forest preprocessing-and-model pipeline is saved as
-`models/churn_model.joblib`. Its input is one row of raw customer fields;
-preprocessing is part of the pipeline so training and API scoring use the
-same transformations.
+Sigmoid calibration had the lower mean validation-fold Brier score
+(0.1351 +/- 0.0060, versus isotonic 0.1352 +/- 0.0055) and was selected.
+On the hold-out split, Brier score changed from 0.1624 before calibration
+to 0.1368 after calibration. Ten-bin reliability summaries are printed by
+the training script and stored in model metadata.
+
+Risk bands are derived from the one-third and two-thirds quantiles of
+out-of-fold calibrated training probabilities. The current saved cutoffs are
+0.074306 and 0.344725; the API loads them from metadata rather than embedding
+band constants in application code.
+
+The cost selector uses explicitly illustrative assumptions: offer cost
+$30, customer value $500, and save rate 0.30. The break-even probability is
+`offer_cost / (save_rate * customer_value)` = 0.200. The validation-selected
+threshold was 0.200090; it flagged 651 hold-out customers and caught 318
+hold-out churners. The estimated validation net value is $112,353.78 under
+these assumptions, not observed revenue or a campaign result. Override the
+assumptions with CLI flags or `config/cost_assumptions.json`.
+
+The fitted calibrated pipeline is saved to `models/churn_model.joblib`;
+`models/model_metadata.json` records its version, training environment,
+feature list, thresholds, assumptions, and evaluation results. Feature
+importances from the uncalibrated Random Forest fit were `tenure` (0.1808),
+`Contract_Two year` (0.1208), and `TotalCharges` (0.1174); they are predictive
+associations, not causal effects.
+
+**Limitations:** the evaluation is a random hold-out from one cross-sectional
+dataset, not a future-period test. Offer economics are assumptions, and
+unseen categories map to the dropped baseline in model space. See the
+[project guide](docs/PROJECT_GUIDE.md) for serving and monitoring caveats.
 
 ## Recommendations
 
@@ -230,11 +286,15 @@ not enter them at a `PS ...>` PowerShell prompt. `python -m uvicorn` runs
 Uvicorn through the active WSL Python environment, so it does not depend on
 the shell finding a separate `uvicorn` command.
 
-Interactive API documentation is at <http://127.0.0.1:8000/docs>. The health
-check is `GET /health`. Send every raw customer feature (excluding
-`customerID` and `Churn`) to `POST /predict`; the response contains the
-churn probability and an illustrative risk band (`low` below 0.33, `medium`
-from 0.33 to below 0.66, and `high` at or above 0.66).
+Interactive API documentation is at <http://127.0.0.1:8000/docs>. `GET /health`
+reports the loaded model version. Send every raw customer feature
+(excluding `customerID` and `Churn`) to `POST /predict`; the response includes
+churn probability, a risk band derived from model metadata, and `model_version`.
+The default tenure validation ceiling is 120 months and can be overridden
+with `TENURE_UPPER_BOUND`; it is intentionally above the training data's
+observed maximum, so such long-tenure scores are extrapolations. The batch
+route `POST /predict/batch` accepts a JSON array of up to 1,000 validated
+customers and returns one prediction per row.
 
 Example request:
 
@@ -273,16 +333,17 @@ Run the tests after installing development dependencies with
 ### GitHub Pages dashboard
 
 The GitHub Actions workflow runs the tests, regenerates the dashboard, and
-deploys it when code is pushed to `main` (or started manually). Before
-publishing:
+deploys it when code is pushed to `main` (or started manually). A separate CI
+job builds the API Docker image and checks `/health`; there is no automated
+API deployment. Before publishing:
 
 1. In the repository, open **Settings → Pages** and set **Build and
    deployment → Source** to **GitHub Actions**.
 2. Push the project to the `main` branch.
 3. Check the **Actions** tab and wait for **Deploy dashboard** to finish.
    Deployment is blocked if tests fail.
-4. Open the site root at
-   `https://<username>.github.io/<repo-name>/`. The workflow deploys
+4. Open the live dashboard at
+   <https://gvishnu-in.github.io/churn-prediction/>. The workflow deploys
    `dashboard/index.html` at this root URL.
 
 The workflow generates both dashboard HTML files from the checked-in cleaned
@@ -290,9 +351,15 @@ CSV. The generated HTML is ignored by Git and does not need to be committed.
 
 ### Prediction API
 
-Deploy the repository as a **Docker Web Service** on Render, or an equivalent
-Docker service on Railway or Fly.io. Connect the service to this repository
-and deploy using the included `Dockerfile`; the model is loaded once when the
-FastAPI app starts. Free tiers may sleep when idle, so the first request
-after inactivity can take longer. After deployment, verify `/health` and
-open `/docs` on the service URL.
+Build and run the API container locally:
+
+```powershell
+docker build -t churn-api .
+docker run --rm -p 8000:8000 churn-api
+curl.exe --fail http://127.0.0.1:8000/health
+```
+
+The image uses a non-root user and has a Docker healthcheck. The model and
+metadata are loaded once at application startup. For production, connect the
+repository to a Docker hosting service and deploy the image; that hosting
+step is manual and is not part of the checked-in GitHub Actions workflow.
