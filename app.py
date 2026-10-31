@@ -15,7 +15,7 @@ import sklearn
 from fastapi import Body, FastAPI, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from model_utils import risk_level_for
+from model_utils import oov_check, risk_level_for
 
 MODEL_PATH = Path(__file__).resolve().parent / "models" / "churn_model.joblib"
 METADATA_PATH = Path(__file__).resolve().parent / "models" / "model_metadata.json"
@@ -146,6 +146,7 @@ def _log_request(
         "model_version": metadata.get("model_version"),
         "probability": getattr(request.state, "log_probability", None),
         "risk_level": getattr(request.state, "log_risk_level", None),
+        "oov_counts": getattr(request.state, "oov_counts", {}),
         "status_code": status_code,
         "method": request.method,
         "path": request.url.path,
@@ -198,6 +199,7 @@ def predict(
     risk_level = risk_level_for(probability, cutoffs)
     request.state.log_probability = probability
     request.state.log_risk_level = risk_level
+    request.state.oov_counts = oov_check(features, request.app.state.model)
     return {
         "churn_probability": probability,
         "risk_level": risk_level,
@@ -215,6 +217,7 @@ def predict_batch(
     features = pd.DataFrame([customer.model_dump() for customer in customers])
     probabilities = request.app.state.model.predict_proba(features)[:, 1]
     metadata = request.app.state.metadata
+    request.state.oov_counts = oov_check(features, request.app.state.model)
     predictions = []
     risk_counts = {"low": 0, "medium": 0, "high": 0}
     for probability in probabilities:
