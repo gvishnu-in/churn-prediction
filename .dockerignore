@@ -8,3 +8,13 @@ data
 dashboard
 README.md
 requirements-dev.txt
+docs
+monitoring
+01_data_cleaning.py
+02_eda_analysis.py
+03_classification_model.py
+04_create_dashboard.py
+cost_assumptions.py
+score_customers.py
+*.pdf
+*.docx
