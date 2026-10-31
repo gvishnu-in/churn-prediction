@@ -74,7 +74,23 @@ def make_pipeline(
             ),
             (
                 "categorical",
-                OneHotEncoder(drop="first", handle_unknown="ignore"),
+                Pipeline(
+                    steps=[
+                        (
+                            "imputer",
+                            SimpleImputer(
+                                strategy="constant",
+                                fill_value="__MISSING__",
+                            ),
+                        ),
+                        (
+                            "encoder",
+                            OneHotEncoder(
+                                drop="first", handle_unknown="ignore"
+                            ),
+                        ),
+                    ]
+                ),
                 categorical_features,
             ),
         ]

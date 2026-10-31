@@ -25,3 +25,13 @@ def test_unseen_category_maps_to_dropped_baseline_and_is_counted() -> None:
     if hasattr(encoded, "toarray"):
         encoded = encoded.toarray()
     assert np.array_equal(encoded[0], encoded[1])
+
+
+def test_missing_category_is_counted_and_scored_by_saved_pipeline() -> None:
+    model = joblib.load(MODEL_PATH)
+    missing = pd.DataFrame([{**CUSTOMER_EXAMPLE, "gender": np.nan}])
+
+    assert oov_check(missing, model)["gender"] == 1
+    with pytest.warns(UserWarning, match="unknown categories"):
+        probability = float(model.predict_proba(missing)[0, 1])
+    assert 0.0 <= probability <= 1.0

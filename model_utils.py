@@ -35,7 +35,12 @@ def oov_check(data: pd.DataFrame, model) -> dict[str, int]:
             for name, _, columns in preprocessing.transformers_
             if name == "categorical"
         )
-        vocabularies = categorical_transformer.categories_
+        encoder = (
+            categorical_transformer.named_steps["encoder"]
+            if hasattr(categorical_transformer, "named_steps")
+            else categorical_transformer
+        )
+        vocabularies = encoder.categories_
     except (AttributeError, KeyError, StopIteration, IndexError) as error:
         raise ValueError(
             "The supplied model does not expose a fitted categorical vocabulary."
