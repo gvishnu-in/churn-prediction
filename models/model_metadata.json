@@ -1,7 +1,7 @@
 {
   "model_version": "1.1.0",
-  "trained_at": "2026-10-31T05:41:23.629786Z",
-  "git_sha": "5baba25",
+  "trained_at": "2026-10-31T05:58:19.264302Z",
+  "git_sha": "99c5bbc",
   "versions": {
     "sklearn": "1.9.1",
     "pandas": "3.0.6",
