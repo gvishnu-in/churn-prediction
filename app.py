@@ -1,6 +1,7 @@
 """FastAPI service for customer churn predictions."""
 
 from contextlib import asynccontextmanager
+import json
 from pathlib import Path
 from typing import Literal
 
@@ -10,6 +11,7 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 MODEL_PATH = Path(__file__).resolve().parent / "models" / "churn_model.joblib"
+METADATA_PATH = Path(__file__).resolve().parent / "models" / "model_metadata.json"
 
 CUSTOMER_EXAMPLE = {
     "gender": "Female",
@@ -84,6 +86,9 @@ class CustomerFeatures(BaseModel):
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     application.state.model = joblib.load(MODEL_PATH)
+    application.state.metadata = json.loads(
+        METADATA_PATH.read_text(encoding="utf-8")
+    )
     yield
     del application.state.model
 
@@ -109,10 +114,11 @@ def predict(
 ) -> dict[str, float | str]:
     features = pd.DataFrame([customer.model_dump()])
     probability = float(request.app.state.model.predict_proba(features)[0, 1])
+    cutoffs = request.app.state.metadata["risk_band_cutoffs"]
     risk_level: Literal["low", "medium", "high"]
-    if probability < 0.33:
+    if probability < cutoffs["low_upper"]:
         risk_level = "low"
-    elif probability < 0.66:
+    elif probability < cutoffs["medium_upper"]:
         risk_level = "medium"
     else:
         risk_level = "high"

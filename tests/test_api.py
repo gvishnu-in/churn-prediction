@@ -18,6 +18,15 @@ def test_health_and_prediction_endpoints() -> None:
     assert isinstance(body["churn_probability"], float)
     assert 0.0 <= body["churn_probability"] <= 1.0
     assert body["risk_level"] in {"low", "medium", "high"}
+    cutoffs = app.state.metadata["risk_band_cutoffs"]
+    expected_risk = (
+        "low"
+        if body["churn_probability"] < cutoffs["low_upper"]
+        else "medium"
+        if body["churn_probability"] < cutoffs["medium_upper"]
+        else "high"
+    )
+    assert body["risk_level"] == expected_risk
 
 
 def test_prediction_rejects_invalid_customer_fields() -> None:
