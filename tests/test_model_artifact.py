@@ -6,7 +6,7 @@ import pytest
 
 from app import CUSTOMER_EXAMPLE, MODEL_PATH, METADATA_PATH
 
-GOLDEN_PROBABILITY = 0.757015577196797
+GOLDEN_PROBABILITY = 0.8310408295004077
 
 
 def test_golden_customer_probability_and_metadata() -> None:
@@ -24,3 +24,7 @@ def test_golden_customer_probability_and_metadata() -> None:
         "save_rate": 0.3,
         "break_even_threshold": 0.2,
     }
+    assert set(metadata["driver_reference_values"]) == set(metadata["feature_list"])
+    band_rates = metadata["risk_band_validation_summary"]
+    assert band_rates["low"]["observed_churn_rate"] < band_rates["medium"]["observed_churn_rate"]
+    assert band_rates["medium"]["observed_churn_rate"] < band_rates["high"]["observed_churn_rate"]

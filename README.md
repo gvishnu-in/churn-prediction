@@ -1,5 +1,8 @@
 # Customer Churn Analysis — Telco Dataset
 
+[![Tests and dashboard deployment](https://github.com/gvishnu-in/churn-prediction/actions/workflows/deploy-dashboard.yml/badge.svg)](https://github.com/gvishnu-in/churn-prediction/actions/workflows/deploy-dashboard.yml)
+![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB)
+
 **Live dashboard:** [Telco Customer Churn Dashboard](https://gvishnu-in.github.io/churn-prediction/)
 
 **Project guide:** [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)
@@ -166,8 +169,9 @@ not required.
 **Intended use:** prioritize customers for a retention review or offer test.
 This is not an automated cancellation decision and is not a causal estimate.
 
-**Data:** the raw Telco CSV has 7,043 rows. The target is `Churn`; `customerID`
-is excluded. The stratified 80/20 hold-out comparison uses random state 42.
+**Data:** the source Telco CSV has 7,043 rows. Training reads the cleaned CSV
+written by `01_data_cleaning.py`; the target is `Churn`, and `customerID` plus
+EDA-only derived columns are excluded. The stratified 80/20 hold-out comparison uses random state 42.
 Five-fold stratified cross-validation runs only on the training portion.
 The final model is a calibrated Random Forest pipeline; its fit uses 5,634
 training rows and 19 raw customer features.
@@ -179,9 +183,9 @@ at the largest recall with precision at least 0.60.
 
 | Model | ROC-AUC | PR-AUC (average precision) | Recall at precision >= 0.60 |
 |---|---:|---:|---:|
-| Logistic Regression | 0.846 +/- 0.014 | 0.661 +/- 0.022 | 0.656 +/- 0.085 |
-| Logistic Regression (balanced) | 0.846 +/- 0.014 | 0.660 +/- 0.022 | 0.652 +/- 0.086 |
-| Random Forest (balanced) | 0.847 +/- 0.012 | 0.661 +/- 0.020 | 0.652 +/- 0.079 |
+| Logistic Regression | 0.846 +/- 0.014 | 0.662 +/- 0.022 | 0.654 +/- 0.085 |
+| Logistic Regression (balanced) | 0.846 +/- 0.014 | 0.660 +/- 0.022 | 0.654 +/- 0.090 |
+| Random Forest (balanced) | 0.846 +/- 0.010 | 0.660 +/- 0.023 | 0.656 +/- 0.075 |
 
 ### Preserved hold-out comparison
 
@@ -189,11 +193,11 @@ These are the existing default class-label prediction results, retained so
 they can be compared with the cross-validation results. The table uses the
 same stratified hold-out split.
 
-| Model | Accuracy | Precision | Recall | ROC-AUC |
-|---|---:|---:|---:|---:|
-| Logistic Regression | 0.807 | 0.660 | 0.561 | 0.842 |
-| Logistic Regression (balanced) | 0.739 | 0.505 | 0.783 | 0.842 |
-| Random Forest (balanced) | 0.754 | 0.524 | 0.802 | 0.843 |
+| Model | Accuracy | Precision | Recall | ROC-AUC | PR-AUC |
+|---|---:|---:|---:|---:|---:|
+| Logistic Regression | 0.806 | 0.657 | 0.559 | 0.842 | 0.634 |
+| Logistic Regression (balanced) | 0.738 | 0.504 | 0.783 | 0.842 | 0.633 |
+| Random Forest (balanced) | 0.752 | 0.521 | 0.781 | 0.839 | 0.645 |
 
 The original unweighted Logistic Regression and Random Forest scores match
 the initial README values. The balanced Logistic Regression is an added
@@ -203,36 +207,53 @@ matter.
 
 ### Calibration and threshold
 
-Sigmoid calibration had the lower mean validation-fold Brier score
-(0.1351 +/- 0.0060, versus isotonic 0.1352 +/- 0.0055) and was selected.
-On the hold-out split, Brier score changed from 0.1624 before calibration
-to 0.1368 after calibration. Ten-bin reliability summaries are printed by
+Isotonic calibration had a slightly lower mean validation-fold Brier score
+(0.1354 +/- 0.0043, versus sigmoid 0.1354 +/- 0.0051) and was selected.
+On the hold-out split, Brier score changed from 0.1634 before calibration
+to 0.1377 after calibration. Ten-bin reliability summaries are printed by
 the training script and stored in model metadata.
 
 Risk bands are derived from the one-third and two-thirds quantiles of
 out-of-fold calibrated training probabilities. The current saved cutoffs are
-0.074306 and 0.344725; the API loads them from metadata rather than embedding
-band constants in application code.
+0.084730 and 0.327105; the API loads them from metadata rather than embedding
+band constants in application code. Calibration and observed churn rates for
+each band are stored in the model metadata; these rates are empirical
+validation estimates, not guaranteed future frequencies.
+On out-of-fold training predictions, the observed churn rates were 3.4%,
+19.4%, and 56.9% in the low, medium, and high bands, respectively.
 
 The cost selector uses explicitly illustrative assumptions: offer cost
 $30, customer value $500, and save rate 0.30. The break-even probability is
 `offer_cost / (save_rate * customer_value)` = 0.200. The validation-selected
-threshold was 0.200090; it flagged 651 hold-out customers and caught 318
-hold-out churners. The estimated validation net value is $112,353.78 under
+threshold was 0.200624; it flagged 667 hold-out customers and caught 318
+hold-out churners. The estimated validation net value is $112,464.01 under
 these assumptions, not observed revenue or a campaign result. Override the
 assumptions with CLI flags or `config/cost_assumptions.json`.
 
 The fitted calibrated pipeline is saved to `models/churn_model.joblib`;
 `models/model_metadata.json` records its version, training environment,
 feature list, thresholds, assumptions, and evaluation results. Feature
-importances from the uncalibrated Random Forest fit were `tenure` (0.1808),
-`Contract_Two year` (0.1208), and `TotalCharges` (0.1174); they are predictive
-associations, not causal effects.
+importances from the uncalibrated Random Forest fit were
+`Contract_Month-to-month` (0.1281), `tenure` (0.1230), and `TotalCharges`
+(0.0891); they are predictive
+associations, not causal effects. The batch scorer exports each customer's
+three largest isolated feature-replacement probability deltas as JSON in
+`top_3_drivers`; these are model explanations against training medians/modes,
+not causal effects.
 
 **Limitations:** the evaluation is a random hold-out from one cross-sectional
 dataset, not a future-period test. Offer economics are assumptions, and
-unseen categories map to the dropped baseline in model space. See the
+unseen categories are counted and mapped to an all-zero one-hot vector rather
+than being treated as any known category. See the
 [project guide](docs/PROJECT_GUIDE.md) for serving and monitoring caveats.
+
+## Sources and claim provenance
+
+- **Dataset:** [IBM Telco Customer Churn dataset on Kaggle](https://www.kaggle.com/datasets/blastchar/telco-customer-churn).
+- **Descriptive rates and dashboard figures:** recomputable from the included cleaned data with [`01_data_cleaning.py`](01_data_cleaning.py), [`02_eda_analysis.py`](02_eda_analysis.py), and [`04_create_dashboard.py`](04_create_dashboard.py). These are observational associations, not causal findings.
+- **Model metrics and calibration summaries:** generated by [`03_classification_model.py`](03_classification_model.py) and retained in [`models/model_metadata.json`](models/model_metadata.json). The split, random seed, CV strategy, and assumptions are documented above.
+- **Metric definitions:** [scikit-learn model evaluation](https://scikit-learn.org/stable/modules/model_evaluation.html) and [probability calibration](https://scikit-learn.org/stable/modules/calibration.html).
+- **Campaign economics:** the offer cost, customer value, and save rate are explicitly illustrative defaults in [`cost_assumptions.py`](cost_assumptions.py), not measured outcomes.
 
 ## Recommendations
 

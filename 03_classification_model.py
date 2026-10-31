@@ -38,19 +38,21 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 
 from cost_assumptions import DEFAULT_COST_CONFIG, CostAssumptions, load_cost_assumptions
+from model_utils import (
+    CUSTOMER_FEATURES,
+    NUMERIC_FEATURES,
+    prepare_customer_features,
+    risk_level_for,
+)
 
 RANDOM_STATE = 42
 CV_FOLDS = 5
 TARGET_PRECISION = 0.60
 PROJECT_DIR = Path(__file__).resolve().parent
-DATA_PATH = PROJECT_DIR / "data" / "WA_Fn-UseC_-Telco-Customer-Churn.csv"
+DATA_PATH = PROJECT_DIR / "data" / "telco_churn_clean.csv"
 MODEL_PATH = PROJECT_DIR / "models" / "churn_model.joblib"
 METADATA_PATH = PROJECT_DIR / "models" / "model_metadata.json"
-MODEL_VERSION = "1.1.0"
-TARGET_COLUMN = "Churn"
-IDENTIFIER_COLUMN = "customerID"
-NUMERIC_FEATURES = ["SeniorCitizen", "tenure", "MonthlyCharges", "TotalCharges"]
-
+MODEL_VERSION = "1.2.0"
 
 def make_pipeline(
     customer_columns: list[str], model: BaseEstimator
@@ -66,7 +68,7 @@ def make_pipeline(
                 "numeric",
                 Pipeline(
                     steps=[
-                        ("imputer", SimpleImputer(strategy="constant", fill_value=0)),
+                        ("imputer", SimpleImputer(strategy="median")),
                         ("scaler", StandardScaler()),
                     ]
                 ),
@@ -79,14 +81,13 @@ def make_pipeline(
                         (
                             "imputer",
                             SimpleImputer(
-                                strategy="constant",
-                                fill_value="__MISSING__",
+                                strategy="most_frequent",
                             ),
                         ),
                         (
                             "encoder",
                             OneHotEncoder(
-                                drop="first", handle_unknown="ignore"
+                                drop=None, handle_unknown="ignore"
                             ),
                         ),
                     ]
@@ -107,6 +108,7 @@ def report(name, y_true, y_pred, y_proba) -> dict[str, float | str]:
         "precision": round(precision_score(y_true, y_pred), 3),
         "recall": round(recall_score(y_true, y_pred), 3),
         "roc_auc": round(roc_auc_score(y_true, y_proba), 3),
+        "pr_auc": round(average_precision_score(y_true, y_proba), 3),
     }
 
 
@@ -215,6 +217,45 @@ def reliability_summary(
     return summary
 
 
+def risk_band_summary(
+    y_true: pd.Series, probabilities: np.ndarray, cutoffs: dict[str, float]
+) -> dict[str, dict[str, float | int]]:
+    summary = {}
+    for band in ("low", "medium", "high"):
+        selected = np.array(
+            [risk_level_for(float(probability), cutoffs) == band for probability in probabilities]
+        )
+        summary[band] = {
+            "customer_count": int(selected.sum()),
+            "mean_predicted_probability": float(probabilities[selected].mean()),
+            "observed_churn_rate": float(y_true.to_numpy()[selected].mean()),
+        }
+    return summary
+
+
+def load_training_data() -> tuple[pd.DataFrame, pd.Series]:
+    data = pd.read_csv(DATA_PATH)
+    if "Churn" not in data:
+        raise ValueError(f"Cleaned training data is missing the target column: {DATA_PATH}")
+    y = data["Churn"]
+    if y.isna().any() or not set(y.unique()).issubset({0, 1}):
+        raise ValueError("Cleaned training data Churn must contain only 0 and 1.")
+    X = prepare_customer_features(data, list(CUSTOMER_FEATURES))
+    return X, y.astype(int)
+
+
+def driver_reference_values(
+    X_train: pd.DataFrame, feature_list: list[str]
+) -> dict[str, object]:
+    references = {}
+    for column in feature_list:
+        if column in NUMERIC_FEATURES:
+            references[column] = float(X_train[column].median())
+        else:
+            references[column] = str(X_train[column].mode(dropna=True).iloc[0])
+    return references
+
+
 def select_cost_threshold(
     probabilities: np.ndarray, assumptions: CostAssumptions
 ) -> tuple[float, float]:
@@ -254,16 +295,8 @@ def main() -> None:
         f"save_rate={assumptions.save_rate:.2f}, "
         f"break_even_threshold={assumptions.break_even_threshold:.3f}"
     )
-    data = pd.read_csv(DATA_PATH)
-    customer_columns = [
-        column
-        for column in data.columns
-        if column not in {IDENTIFIER_COLUMN, TARGET_COLUMN}
-    ]
-    data["TotalCharges"] = pd.to_numeric(data["TotalCharges"], errors="coerce")
-
-    X = data[customer_columns]
-    y = data[TARGET_COLUMN].map({"Yes": 1, "No": 0})
+    X, y = load_training_data()
+    customer_columns = list(CUSTOMER_FEATURES)
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y
@@ -447,6 +480,11 @@ def main() -> None:
     risk_low_upper, risk_medium_upper = np.quantile(
         validation_probabilities, [1 / 3, 2 / 3]
     )
+    risk_cutoffs = {
+        "low_upper": float(risk_low_upper),
+        "medium_upper": float(risk_medium_upper),
+    }
+    risk_summary = risk_band_summary(y_train, validation_probabilities, risk_cutoffs)
     holdout_flagged = calibrated_probabilities >= chosen_threshold
     print("=" * 60)
     print("COST-BASED THRESHOLD")
@@ -461,6 +499,8 @@ def main() -> None:
         "Risk-band cutoffs (training out-of-fold calibrated probability tertiles): "
         f"low < {risk_low_upper:.6f}, medium < {risk_medium_upper:.6f}"
     )
+    print("Observed churn rates by calibrated risk band:")
+    print(pd.DataFrame(risk_summary).T.to_string())
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(calibrated_model, MODEL_PATH, compress=3)
@@ -483,11 +523,12 @@ def main() -> None:
         },
         "training_row_count": int(len(X_train)),
         "feature_list": customer_columns,
+        "driver_reference_values": driver_reference_values(
+            X_train, customer_columns
+        ),
         "chosen_threshold": chosen_threshold,
-        "risk_band_cutoffs": {
-            "low_upper": float(risk_low_upper),
-            "medium_upper": float(risk_medium_upper),
-        },
+        "risk_band_cutoffs": risk_cutoffs,
+        "risk_band_validation_summary": risk_summary,
         "cost_assumptions": {
             "offer_cost": assumptions.offer_cost,
             "customer_value": assumptions.customer_value,

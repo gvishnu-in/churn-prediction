@@ -10,7 +10,12 @@ import pandas as pd
 
 from app import METADATA_PATH, MODEL_PATH
 from cost_assumptions import DEFAULT_COST_CONFIG, load_cost_assumptions
-from model_utils import oov_check, risk_level_for
+from model_utils import (
+    counterfactual_driver_rows,
+    oov_check,
+    prepare_customer_features,
+    risk_level_for,
+)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -94,15 +99,21 @@ def score_customers(
         raise ValueError(
             "Input CSV is missing model features: " + ", ".join(missing_features)
         )
-    data["TotalCharges"] = pd.to_numeric(data["TotalCharges"], errors="coerce")
-    features = data[feature_list]
+    features = prepare_customer_features(data, feature_list)
     oov_counts = oov_check(features, model)
     print(f"OOV counts by categorical column: {oov_counts}")
     probabilities = model.predict_proba(features)[:, 1]
+    top_drivers = counterfactual_driver_rows(
+        model,
+        features,
+        probabilities,
+        metadata["driver_reference_values"],
+    )
 
     scored = pd.DataFrame(
         {
             "churn_probability": probabilities,
+            "top_3_drivers": top_drivers,
             "risk_level": [
                 risk_level_for(float(probability), metadata["risk_band_cutoffs"])
                 for probability in probabilities
@@ -134,7 +145,13 @@ def score_customers(
         ]
         output_columns.append("customer_id")
     output_columns.extend(
-        ["churn_probability", "risk_level", "rank", "decile"]
+        [
+            "churn_probability",
+            "risk_level",
+            "rank",
+            "decile",
+            "top_3_drivers",
+        ]
     )
     result = scored[output_columns]
     output_path.parent.mkdir(parents=True, exist_ok=True)

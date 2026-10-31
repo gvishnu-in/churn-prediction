@@ -44,6 +44,16 @@ def test_prediction_rejects_invalid_customer_fields() -> None:
     assert response.status_code == 422
 
 
+def test_prediction_accepts_tenure_above_training_range() -> None:
+    long_tenure_customer = {**CUSTOMER_EXAMPLE, "tenure": 120}
+
+    with TestClient(app) as client:
+        response = client.post("/predict", json=long_tenure_customer)
+
+    assert response.status_code == 200
+    assert 0.0 <= response.json()["churn_probability"] <= 1.0
+
+
 def test_prediction_rejects_category_outside_training_vocabulary() -> None:
     invalid_customer = {**CUSTOMER_EXAMPLE, "gender": "Other"}
 

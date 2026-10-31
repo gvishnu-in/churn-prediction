@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import pandas as pd
 
@@ -19,9 +20,17 @@ def test_score_customers_fixture(tmp_path, capsys) -> None:
         "risk_level",
         "rank",
         "decile",
+        "top_3_drivers",
     ]
     assert len(written) == 4
     assert written["rank"].tolist() == [1, 2, 3, 4]
     assert written["churn_probability"].is_monotonic_decreasing
     assert written["customer_id"].tolist() == result["customer_id"].tolist()
+    drivers = json.loads(written.loc[0, "top_3_drivers"])
+    assert len(drivers) == 3
+    assert all(
+        {"feature", "value", "reference_value", "probability_delta"}
+        == set(driver)
+        for driver in drivers
+    )
     assert "Top-decile lift:" in capsys.readouterr().out
