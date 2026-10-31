@@ -16,6 +16,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  api-docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build --tag churn-api-smoke .
+      - name: Start API container
+        run: docker run --detach --name churn-api-smoke --publish 8000:8000 churn-api-smoke
+      - name: Check API health
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8000/health > health.json; then
+              cat health.json
+              grep -q '"model_version"' health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs churn-api-smoke
+          exit 1
+      - name: Stop API container
+        if: always()
+        run: |
+          docker stop churn-api-smoke || true
+          docker rm churn-api-smoke || true
+
   deploy:
     environment:
       name: github-pages
