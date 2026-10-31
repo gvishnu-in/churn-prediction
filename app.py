@@ -2,16 +2,19 @@
 
 from contextlib import asynccontextmanager
 import json
+import logging
 from pathlib import Path
 from typing import Literal
 
 import joblib
 import pandas as pd
+import sklearn
 from fastapi import FastAPI, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 MODEL_PATH = Path(__file__).resolve().parent / "models" / "churn_model.joblib"
 METADATA_PATH = Path(__file__).resolve().parent / "models" / "model_metadata.json"
+logger = logging.getLogger(__name__)
 
 CUSTOMER_EXAMPLE = {
     "gender": "Female",
@@ -89,6 +92,13 @@ async def lifespan(application: FastAPI):
     application.state.metadata = json.loads(
         METADATA_PATH.read_text(encoding="utf-8")
     )
+    training_sklearn = application.state.metadata["versions"]["sklearn"]
+    if sklearn.__version__ != training_sklearn:
+        logger.warning(
+            "MODEL SKLEARN VERSION MISMATCH: trained with %s, installed %s",
+            training_sklearn,
+            sklearn.__version__,
+        )
     yield
     del application.state.model
 
@@ -105,7 +115,10 @@ app = FastAPI(
 def health(request: Request) -> dict[str, str]:
     if not hasattr(request.app.state, "model"):
         return {"status": "unavailable"}
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "model_version": request.app.state.metadata["model_version"],
+    }
 
 
 @app.post("/predict")
@@ -122,4 +135,8 @@ def predict(
         risk_level = "medium"
     else:
         risk_level = "high"
-    return {"churn_probability": probability, "risk_level": risk_level}
+    return {
+        "churn_probability": probability,
+        "risk_level": risk_level,
+        "model_version": request.app.state.metadata["model_version"],
+    }

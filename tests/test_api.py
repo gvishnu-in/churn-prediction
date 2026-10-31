@@ -10,11 +10,15 @@ def test_health_and_prediction_endpoints() -> None:
         prediction = client.post("/predict", json=CUSTOMER_EXAMPLE)
 
     assert health.status_code == 200
-    assert health.json() == {"status": "ok"}
+    assert health.json() == {
+        "status": "ok",
+        "model_version": app.state.metadata["model_version"],
+    }
     assert docs.status_code == 200
     assert prediction.status_code == 200
     body = prediction.json()
-    assert set(body) == {"churn_probability", "risk_level"}
+    assert set(body) == {"churn_probability", "risk_level", "model_version"}
+    assert body["model_version"] == app.state.metadata["model_version"]
     assert isinstance(body["churn_probability"], float)
     assert 0.0 <= body["churn_probability"] <= 1.0
     assert body["risk_level"] in {"low", "medium", "high"}
