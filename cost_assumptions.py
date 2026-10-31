@@ -84,13 +84,13 @@ def load_cost_assumptions(
     values.update(
         {name: value for name, value in overrides.items() if value is not None}
     )
-    try:
-        assumptions = CostAssumptions(
-            offer_cost=float(values["offer_cost"]),
-            customer_value=float(values["customer_value"]),
-            save_rate=float(values["save_rate"]),
-        )
-    except (TypeError, ValueError) as error:
-        raise ValueError("Cost assumptions must be numeric.") from error
+    for name, value in values.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{name} must be a number.")
+    assumptions = CostAssumptions(
+        offer_cost=float(values["offer_cost"]),
+        customer_value=float(values["customer_value"]),
+        save_rate=float(values["save_rate"]),
+    )
     _validate(assumptions)
     return assumptions

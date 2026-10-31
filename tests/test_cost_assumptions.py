@@ -48,3 +48,20 @@ def test_invalid_cost_assumptions_are_rejected(overrides, message) -> None:
         load_cost_assumptions(
             cost_config=Path("missing-cost-config.json"), **overrides
         )
+
+
+def test_boolean_and_string_cost_values_are_rejected(tmp_path) -> None:
+    config = tmp_path / "cost_assumptions.json"
+    config.write_text(
+        json.dumps(
+            {"offer_cost": True, "customer_value": 500, "save_rate": 0.3}
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="offer_cost must be a number"):
+        load_cost_assumptions(config)
+
+    with pytest.raises(ValueError, match="offer_cost must be a number"):
+        load_cost_assumptions(
+            tmp_path / "absent.json", offer_cost="30"
+        )
